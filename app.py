@@ -15,8 +15,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 
-from src.data_loader import load_csv, generate_sample_data, get_available_csv_files
+from src.data_loader import (
+    load_csv,
+    generate_sample_data,
+    get_available_csv_files,
+    fetch_live_crypto_candles,
+)
 from src.indicators import add_all_indicators
 from src.strategy import analyze_market, generate_signal
 from src.backtest import run_backtest
@@ -73,6 +82,9 @@ st.caption("Paper trading & backtesting — Versie 1.0 | Geen echte orders mogel
 with st.sidebar:
     st.title("📁 Dataset")
 
+    data_mode = st.radio("Databron:", ["Live crypto", "CSV-bestand"])
+    data_source = "live" if data_mode == "Live crypto" else "csv"
+
     csv_files = get_available_csv_files("data")
 
     if not csv_files:
@@ -100,9 +112,52 @@ with st.sidebar:
         st.error(f"Fout bij laden: {e}")
         st.stop()
 
+    if data_source == "live":
+        product_options = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD"]
+        product_id = st.selectbox("Live market:", product_options)
+        timeframe_map = {
+            "1 minuut": 60,
+            "5 minuten": 300,
+            "15 minuten": 900,
+            "1 uur": 3600,
+            "6 uur": 21600,
+            "1 dag": 86400,
+        }
+        timeframe_label = st.selectbox("Timeframe:", list(timeframe_map), index=1)
+        granularity = timeframe_map[timeframe_label]
+        refresh_sec = st.slider("Ververs elke", 15, 300, 60, 15, format="%d sec")
+        auto_refresh = st.toggle("Auto-refresh", value=True)
+
+        if auto_refresh and st_autorefresh is not None:
+            st_autorefresh(interval=refresh_sec * 1000, key="live_data_refresh")
+        elif auto_refresh:
+            st.caption("Auto-refresh wordt actief na installatie van streamlit-autorefresh.")
+
+        @st.cache_data(ttl=15, show_spinner=False)
+        def laad_live_data(product: str, candle_seconds: int) -> pd.DataFrame:
+            return fetch_live_crypto_candles(product, candle_seconds, limit=300)
+
+        if st.button("Nu verversen"):
+            laad_live_data.clear()
+            st.rerun()
+
+        try:
+            df = laad_live_data(product_id, granularity)
+            asset_name = product_id
+            latest_ts = df["timestamp"].max()
+            st.success(f"{len(df):,} live candles geladen")
+            st.caption(
+                f"Bron: Coinbase Exchange  \n"
+                f"Laatst: {latest_ts.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+        except Exception as e:
+            st.error(f"Live data laden mislukt: {e}")
+            st.info("Probeer een andere market/timeframe of gebruik tijdelijk CSV-data.")
+            st.stop()
+
     st.divider()
 
-    if st.button("🔄 Nieuwe sample data aanmaken"):
+    if data_source == "csv" and st.button("🔄 Nieuwe sample data aanmaken"):
         with st.spinner("Genereren..."):
             generate_sample_data("data/sample_btc.csv")
         st.cache_data.clear()
@@ -129,6 +184,8 @@ tab_analyse, tab_backtest, tab_paper, tab_eval = st.tabs([
 # ════════════════════════════════════════════════════════════════════════════
 with tab_analyse:
     st.header(f"Marktanalyse — {asset_name}")
+    if data_source == "live":
+        st.caption("Live candles worden automatisch vernieuwd zolang auto-refresh aan staat.")
 
     col_grafiek, col_info = st.columns([2, 1])
 

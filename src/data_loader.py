@@ -8,8 +8,9 @@ De timestamp mag ook 'date', 'datetime' of 'Date' heten.
 """
 import pandas as pd
 import numpy as np
+import requests
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def load_csv(filepath: str) -> pd.DataFrame:
@@ -105,3 +106,58 @@ def get_available_csv_files(data_dir: str = "data") -> list[str]:
     if not pad.exists():
         return []
     return sorted(str(f) for f in pad.glob("*.csv"))
+
+
+def fetch_live_crypto_candles(
+    product_id: str = "BTC-USD",
+    granularity: int = 300,
+    limit: int = 300,
+) -> pd.DataFrame:
+    """
+    Haal actuele candles op via de publieke Coinbase Exchange API.
+
+    Dit gebruikt geen API-key en plaatst geen orders. Coinbase accepteert maximaal
+    300 candles per request, daarom begrenzen we de limit bewust.
+    """
+    allowed_granularities = {60, 300, 900, 3600, 21600, 86400}
+    if granularity not in allowed_granularities:
+        raise ValueError("Ongeldige timeframe voor Coinbase candles.")
+
+    limit = max(55, min(int(limit), 300))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(seconds=granularity * limit)
+
+    response = requests.get(
+        f"https://api.exchange.coinbase.com/products/{product_id}/candles",
+        params={
+            "granularity": granularity,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        },
+        headers={"User-Agent": "TradeAI-Coach/1.0"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    if not data:
+        raise ValueError(f"Geen live candles ontvangen voor {product_id}.")
+
+    rows = []
+    for candle in data:
+        if len(candle) < 5:
+            continue
+        rows.append({
+            "timestamp": pd.to_datetime(candle[0], unit="s", utc=True),
+            "low": float(candle[1]),
+            "high": float(candle[2]),
+            "open": float(candle[3]),
+            "close": float(candle[4]),
+            "volume": float(candle[5]) if len(candle) > 5 else 0.0,
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise ValueError(f"Live data voor {product_id} kon niet worden verwerkt.")
+
+    return df.sort_values("timestamp").reset_index(drop=True)

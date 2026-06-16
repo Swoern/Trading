@@ -94,6 +94,50 @@ class BoundedDeltaTests(unittest.TestCase):
         )
 
 
+class ConflictDetectionTests(unittest.TestCase):
+    def test_parse_verdict(self):
+        v = llm_agents.parse_analyst_verdict("Bla bla. VERDICT: bias=0.6, vertrouwen=0.8")
+        self.assertIsNotNone(v)
+        self.assertAlmostEqual(v["bias"], 0.6)
+        self.assertAlmostEqual(v["confidence"], 0.8)
+
+    def test_parse_verdict_none_when_missing(self):
+        self.assertIsNone(llm_agents.parse_analyst_verdict("geen verdict hier"))
+
+    def test_direction_split_detected(self):
+        views = {
+            "technical": "VERDICT: bias=0.7, vertrouwen=0.8",
+            "sentiment": "VERDICT: bias=-0.6, vertrouwen=0.7",
+            "risk": "VERDICT: bias=0.1, vertrouwen=0.5",
+        }
+        conflict = llm_agents.detect_panel_conflict(views, {"bias": 0.2})
+        self.assertIn("analyst_direction_split", conflict)
+
+    def test_coordinator_contradiction_detected(self):
+        views = {
+            "technical": "VERDICT: bias=0.6, vertrouwen=0.8",
+            "sentiment": "VERDICT: bias=0.5, vertrouwen=0.7",
+        }
+        # Analisten duidelijk bullish, coördinator bearish → conflict.
+        conflict = llm_agents.detect_panel_conflict(views, {"bias": -0.5})
+        self.assertIn("coordinator_contradicts_analysts", conflict)
+
+    def test_no_conflict_on_agreement(self):
+        views = {
+            "technical": "VERDICT: bias=0.5, vertrouwen=0.7",
+            "sentiment": "VERDICT: bias=0.4, vertrouwen=0.6",
+        }
+        self.assertEqual(llm_agents.detect_panel_conflict(views, {"bias": 0.45}), [])
+
+    def test_neutralize_only_makes_stricter(self):
+        advice = {"bias": 0.8, "confidence": 0.9, "min_confidence_delta": -2.0, "rationale": "x"}
+        veilig = llm_agents._neutraliseer_bij_conflict(advice, ["analyst_direction_split"])
+        self.assertEqual(veilig["bias"], 0.0)
+        self.assertLessEqual(veilig["confidence"], 0.30)
+        self.assertGreaterEqual(veilig["min_confidence_delta"], 0.0)  # nooit losser
+        self.assertIn("panel-conflict", veilig["rationale"])
+
+
 class RunPanelTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -124,6 +168,20 @@ class RunPanelTests(unittest.TestCase):
         stored = self.database.get_latest_llm_advice("BTC-USD")
         self.assertIsNotNone(stored)
         self.assertEqual(stored["min_conf_delta"], 3.0)
+
+    def test_run_panel_neutralizes_conflicting_panel(self):
+        # Analisten oneens (sterk bull vs sterk bear) + coördinator gokt toch bullish.
+        client = _FakeClient([
+            "VERDICT: bias=0.8, vertrouwen=0.9",
+            "VERDICT: bias=-0.7, vertrouwen=0.8",
+            "VERDICT: bias=0.0, vertrouwen=0.5",
+            '{"bias": 0.7, "confidence": 0.8, "min_confidence_delta": -2, "rationale": "long"}',
+        ])
+        result = llm_agents.run_panel("BTC-USD", {"fear_greed": 50}, client=client)
+        self.assertTrue(result["available"])
+        self.assertIn("analyst_direction_split", result["conflict"])
+        self.assertEqual(result["bias"], 0.0)                 # geneutraliseerd
+        self.assertGreaterEqual(result["min_confidence_delta"], 0.0)  # nooit losser
 
     def test_run_panel_disabled_returns_neutral(self):
         os.environ.pop("TRADEAI_LLM_ENABLED", None)

@@ -153,6 +153,71 @@ def parse_advice(text: str) -> dict:
     }
 
 
+def parse_analyst_verdict(text: str) -> dict | None:
+    """Haal de 'VERDICT: bias=.., vertrouwen=..'-regel uit een analist-antwoord."""
+    if not text:
+        return None
+    match = re.search(
+        r"bias\s*=\s*(-?\d+(?:\.\d+)?).*?(?:vertrouwen|confidence)\s*=\s*(\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    try:
+        bias = max(-1.0, min(1.0, float(match.group(1))))
+        confidence = max(0.0, min(1.0, float(match.group(2))))
+    except Exception:
+        return None
+    return {"bias": bias, "confidence": confidence}
+
+
+def detect_panel_conflict(analyst_views: dict, advice: dict) -> list[str]:
+    """
+    'Liever weigeren dan gokken': geef reden-codes als het panel tegenstrijdig is.
+
+    - analyst_direction_split: minstens één analist sterk bullish én één sterk bearish.
+    - coordinator_contradicts_analysts: de coördinator wijst de andere kant op dan
+      het duidelijke gemiddelde van de analisten.
+    Leeg = geen conflict.
+    """
+    redenen: list[str] = []
+    biases = [
+        v["bias"]
+        for v in (parse_analyst_verdict(t) for t in analyst_views.values())
+        if v is not None
+    ]
+    if len(biases) >= 2:
+        if any(b >= 0.4 for b in biases) and any(b <= -0.4 for b in biases):
+            redenen.append("analyst_direction_split")
+        gemiddelde = sum(biases) / len(biases)
+        coord_bias = float(advice.get("bias") or 0.0)
+        if (
+            abs(gemiddelde) >= 0.3
+            and abs(coord_bias) >= 0.3
+            and (gemiddelde > 0) != (coord_bias > 0)
+        ):
+            redenen.append("coordinator_contradicts_analysts")
+    return redenen
+
+
+def _neutraliseer_bij_conflict(advice: dict, conflict: list[str]) -> dict:
+    """
+    Bij een tegenstrijdig panel: advies veilig neutraliseren. De bias gaat naar 0 en
+    de drempel-verschuiving mag alleen STRENGER worden (nooit losser) — een verward
+    panel mag de bot nooit agressiever maken.
+    """
+    veilig = dict(advice)
+    veilig["bias"] = 0.0
+    veilig["confidence"] = round(min(float(advice.get("confidence") or 0.0), 0.30), 3)
+    veilig["min_confidence_delta"] = round(max(0.0, float(advice.get("min_confidence_delta") or 0.0)), 2)
+    veilig["rationale"] = (
+        f"[panel-conflict: {', '.join(conflict)}] geneutraliseerd. "
+        + str(advice.get("rationale") or "")
+    )[:500]
+    return veilig
+
+
 def run_panel(asset: str, snapshot: dict, client=None, persist: bool = True) -> dict:
     """
     Draai het analisten-panel voor één asset en geef een begrensd advies terug.
@@ -183,12 +248,18 @@ def run_panel(asset: str, snapshot: dict, client=None, persist: bool = True) -> 
     except Exception as exc:
         return neutraal | {"rationale": f"LLM-fout: {exc}"[:200]}
 
+    # 'Liever weigeren dan gokken': bij een tegenstrijdig panel het advies neutraliseren.
+    conflict = detect_panel_conflict(analyst_views, advice)
+    if conflict:
+        advice = _neutraliseer_bij_conflict(advice, conflict)
+
     result = {
         "available": True,
         "bias": advice["bias"],
         "confidence": advice["confidence"],
         "min_confidence_delta": advice["min_confidence_delta"],
         "rationale": advice["rationale"],
+        "conflict": conflict,
         "analysts": analyst_views,
         "model": model,
     }

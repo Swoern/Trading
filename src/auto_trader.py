@@ -58,6 +58,16 @@ from src.markets import (
     SATELLITE_STRATEGY_PARAMS,
     SATELLITE_MARKT_MODUS,
 )
+from src.config import (
+    RISICO_PCT,
+    MAX_DAGVERLIES,
+    SOFT_DAGVERLIES,
+    MAX_OPEN_TRADES,
+    CANDLE_SECONDS,
+    MIN_RR_START,
+    MIN_CONFIDENCE_SCORE,
+    ENABLED_STRATEGIES,
+)
 from src.setup_confidence import calculate_confidence
 from src.trade_quality import score_trade_quality
 from src.trading_costs import round_trip_cost_euro
@@ -106,23 +116,18 @@ GECORRELEERDE_ASSETS = frozenset(MARKETS)
 BTC_MARKT: dict = {"mode": "unknown", "reason": "Nog niet bepaald."}
 
 # ── Discipline-instellingen ────────────────────────────────────────────────────
+# RISICO_PCT, MAX_DAGVERLIES, SOFT_DAGVERLIES, MAX_OPEN_TRADES, CANDLE_SECONDS,
+# MIN_RR_START en MIN_CONFIDENCE_SCORE komen nu uit src/config.py (env-overschrijfbaar).
 STARTKAPITAAL          = 10_000.0   # Gesimuleerd startkapitaal (euro)
-RISICO_PCT             = 0.01       # 1% risico per trade
-MAX_DAGVERLIES         = 0.20       # Harde kill-switch: stop bij 20% dagverlies
-SOFT_DAGVERLIES        = 0.15       # Zachte rem: halveer posities vanaf 15% dagverlies
-MAX_OPEN_TRADES        = 5          # Max gelijktijdige trades
 COOLING_MINUTEN        = 30         # Langere cooling na 3 opeenvolgende verliezen
 MIN_TRADES_PAUZEER     = 20         # Strategie pas pauzeren na minstens dit aantal trades
-CANDLE_SECONDS         = 300        # 5-minuut candles
 CANDLE_LIMIT           = 300        # 300 × 5min ≈ 25 uur aan data voor indicatoren
-MIN_RR_START           = 2.0        # Minimum R/R: bij ~40% winrate break-even op 1:2
 MIN_BACKTEST_TRADES    = 5          # Minimaal recente trades voor volledige strategie-gate
 WF_GENERALIZATION_RATIO = 0.70      # Out-of-sample winrate moet ≥70% van in-sample zijn
 MIN_BACKTEST_WINRATE   = 40.0       # Netto winrate na kosten
 MIN_BACKTEST_PNL       = 0.0        # Netto P&L moet positief zijn
 MIN_PAPER_SCORE        = 0.50       # Zodra genoeg samples bestaan moet paper-score positief zijn
 HARD_BLOCK_PAPER_SCORE = 0.20       # Alleen extreem slechte paper-score blokkeert hard
-MIN_CONFIDENCE_SCORE   = 75         # Totaalscore voordat een setup open mag
 EXPLORATION_CONFIDENCE_SCORE = 65   # Kleine test-trades bij twijfelachtige maar niet slechte setup
 PANIC_LONG_CONFIDENCE_SCORE = 80     # Alleen sterke BTC long/reversal setups in extreme fear
 MAX_PANIC_EXPLORATION_SIZE_MULTIPLIER = 0.10
@@ -2437,6 +2442,8 @@ def _controleer_markt(asset: str):
         _log(f"BTC-first modus: {BTC_MARKT['mode']} - {BTC_MARKT['reason']}")
 
     setups = scan_alle_strategieen(df, min_rr=min_rr, liquidation_zones=liq_zones)
+    # Strategie-whitelist (env TRADEAI_STRATEGIES, default = alle).
+    setups = [s for s in setups if s.get("strategie") in ENABLED_STRATEGIES]
     if not setups:
         record_decision(asset, None, "no_setup", "Geen setup op alle strategieen.")
         _log(f"{asset}: geen setup op alle strategieen.")

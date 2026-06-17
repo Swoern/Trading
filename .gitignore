@@ -30,6 +30,7 @@ Thumbs.db
 bot.lock
 bot.log
 streamlit.log
+watchdog.log
 telegram_offset.txt
 .telegram_last_start
 

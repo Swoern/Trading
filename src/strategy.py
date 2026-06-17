@@ -903,6 +903,7 @@ def scan_alle_strategieen(
     df: pd.DataFrame,
     min_rr: float = 2.0,
     liquidation_zones: list | None = None,
+    precomputed: bool = False,
 ) -> list[dict]:
     """
     Scan alle strategieën op het gegeven DataFrame.
@@ -912,14 +913,21 @@ def scan_alle_strategieen(
       - ADX < 18 → trend-strategieën overgeslagen (choppy markt)
       - Trend-continuïteit: voor trend/pullback-strategieën moet de SMA-trend
         de laatste 3 candles consistent zijn (whipsaw-filter)
+
+    precomputed=True: het DataFrame bevat de indicatoren al (add_all_indicators
+    is causaal, dus dit geeft identieke resultaten als opnieuw berekenen) — gebruikt
+    door de snelle backtester om de O(n²) herberekening te vermijden.
     """
     if len(df) < 60:
         return []
 
-    try:
-        df_ind = add_all_indicators(df)
-    except Exception:
-        return []
+    if precomputed:
+        df_ind = df
+    else:
+        try:
+            df_ind = add_all_indicators(df)
+        except Exception:
+            return []
 
     last = df_ind.iloc[-1]
     prev = df_ind.iloc[-2]

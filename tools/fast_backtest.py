@@ -30,8 +30,17 @@ WARMUP = 60
 def fast_run_backtest(df: pd.DataFrame, min_rr: float = 2.0, initial_capital: float = 10_000.0,
                       risico_per_trade_pct: float = 1.0, max_candles_open: int = 40,
                       fee_rate: float = DEFAULT_FEE_RATE, spread_rate: float = DEFAULT_SPREAD_RATE,
-                      slippage_rate: float = DEFAULT_SLIPPAGE_RATE) -> dict:
+                      slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+                      htf_period: int | None = None, allowed: set | None = None,
+                      select: str = "rr") -> dict:
+    """
+    Extra (optionele) knoppen voor alpha-experimenten — standaard = identiek aan slow:
+      htf_period : alleen mét de macro-trend traden (close vs SMA(htf_period)).
+      allowed    : alleen deze strategieën toestaan.
+      select     : 'rr' (hoogste R/R, default) of 'lowrr' (laagste R/R).
+    """
     df = add_all_indicators(df).reset_index(drop=True)
+    macro = df["close"].rolling(htf_period).mean() if htf_period else None
     trades: list[dict] = []
     i = WARMUP
     kapitaal = initial_capital
@@ -40,11 +49,17 @@ def fast_run_backtest(df: pd.DataFrame, min_rr: float = 2.0, initial_capital: fl
     while i < n - 2:
         venster = df.iloc[max(0, i - WARMUP + 1):i + 1]  # 60 rijen, indicatoren al aanwezig
         setups = scan_alle_strategieen(venster, min_rr=min_rr, precomputed=True)
+        if allowed is not None:
+            setups = [s for s in setups if s.get("strategie") in allowed]
+        if macro is not None and not pd.isna(macro.iloc[i]):
+            up = float(df.iloc[i]["close"]) > float(macro.iloc[i])
+            setups = [s for s in setups if (s["richting"] == "long") == up]
         if not setups:
             i += 1
             continue
 
-        signal = max(setups, key=lambda s: s.get("risk_reward", 0))
+        key = (lambda s: s.get("risk_reward", 0)) if select == "rr" else (lambda s: -s.get("risk_reward", 0))
+        signal = max(setups, key=key)
         richting = signal["richting"]
         entry_candle = df.iloc[i + 1]
         entry_prijs = float(entry_candle["open"])

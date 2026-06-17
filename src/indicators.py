@@ -63,6 +63,30 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
+def vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Rolling Volume Weighted Average Price over `period` candles.
+    Gemiddelde prijs gewogen met volume — waar het 'echte' handelsgewicht ligt.
+    Causaal (trailing window).
+    """
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    pv = (typical * df["volume"]).rolling(window=period, min_periods=period).sum()
+    vol = df["volume"].rolling(window=period, min_periods=period).sum()
+    return pv / vol.replace(0, np.nan)
+
+
+def stoch_rsi(series: pd.Series, period: int = 14, smooth: int = 3) -> pd.Series:
+    """
+    Stochastic RSI — waar staat de RSI binnen zijn eigen recente bereik (0-1)?
+    Gevoeliger dan kale RSI voor over-/onderkochte extremen. Causaal.
+    """
+    r = rsi(series, period)
+    laag = r.rolling(window=period, min_periods=period).min()
+    hoog = r.rolling(window=period, min_periods=period).max()
+    stoch = (r - laag) / (hoog - laag).replace(0, np.nan)
+    return stoch.rolling(window=smooth, min_periods=1).mean()
+
+
 # ── Support & Resistance ──────────────────────────────────────────────────────
 
 def support_resistance(df: pd.DataFrame, lookback: int = 20):
@@ -303,11 +327,15 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["sma20"]    = sma(df["close"], 20)
     df["sma50"]    = sma(df["close"], 50)
     df["ema20"]    = ema(df["close"], 20)
+    df["ema50"]    = ema(df["close"], 50)
+    df["ema200"]   = ema(df["close"], 200)
     df["atr14"]    = atr(df, 14)
     df["rsi14"]    = rsi(df["close"], 14)
     df["vol_ma20"] = volume_ma(df, 20)
     df["adx14"]    = adx(df, 14)
     df["atr_pct"]  = df["atr14"] / df["close"] * 100
+    df["vwap20"]   = vwap(df, 20)
+    df["stoch_rsi"] = stoch_rsi(df["close"], 14)
 
     # Pivot-gebaseerde support/resistance (vervangt simpele rolling min/max)
     df["support"], df["resistance"] = pivot_support_resistance(df, lookback=5)

@@ -92,10 +92,18 @@ class CausalityTests(unittest.TestCase):
 
     def test_all_indicators_columns_present(self):
         df = ind.add_all_indicators(_ohlcv())
-        for col in ("sma20", "sma50", "ema20", "atr14", "rsi14", "adx14",
-                    "macd_line", "macd_hist", "bb_upper", "bb_lower",
-                    "support", "resistance"):
+        for col in ("sma20", "sma50", "ema20", "ema50", "ema200", "atr14", "rsi14",
+                    "adx14", "macd_line", "macd_hist", "bb_upper", "bb_lower",
+                    "support", "resistance", "vwap20", "stoch_rsi"):
             self.assertIn(col, df.columns)
+
+    def test_new_indicators_valid(self):
+        df = ind.add_all_indicators(_ohlcv(250))
+        # VWAP ligt in een redelijke prijsrange; StochRSI tussen 0 en 1.
+        last = df.iloc[-1]
+        self.assertGreater(last["vwap20"], 0)
+        sr = df["stoch_rsi"].dropna()
+        self.assertTrue(((sr >= -1e-9) & (sr <= 1 + 1e-9)).all())
         # Na warmup zijn de kern-indicatoren gevuld op de laatste rij.
         last = df.iloc[-1]
         for col in ("sma20", "rsi14", "atr14", "macd_line"):

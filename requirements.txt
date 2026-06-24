@@ -4,3 +4,8 @@ streamlit>=1.32.0
 plotly>=5.18.0
 requests>=2.31.0
 streamlit-autorefresh>=1.0.1
+psutil>=5.9.0
+
+# Optioneel — alleen nodig voor de LLM-adviseslaag (Fase 3, standaard uit).
+# De bot draait volledig zonder; de import gebeurt lui en faalt zacht.
+# anthropic>=0.40.0

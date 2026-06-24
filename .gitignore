@@ -6,12 +6,15 @@ __pycache__/
 venv/
 env/
 .env
+telegram_config.json
 
 .streamlit/secrets.toml
 
 tradeai.db
 *.sqlite
 *.sqlite3
+tradeai.db.*
+*.predeploy-*
 
 .pytest_cache/
 .mypy_cache/
@@ -22,3 +25,16 @@ Thumbs.db
 
 .vercel/
 .railway/
+
+# Runtime-state en logs (per-host, niet versiebeheren)
+bot.lock
+bot.log
+streamlit.log
+watchdog.log
+telegram_offset.txt
+.telegram_last_start
+
+# Lokale tooling / overig
+.claude/
+TRADEAI/
+custom-nas/

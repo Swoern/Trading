@@ -119,14 +119,34 @@ def evalueer_trades() -> dict:
     # ── Per-trade overzicht ──────────────────────────────────────────
     trade_lijst = []
     for _, t in df.iterrows():
+        # Duur berekenen
+        duur_str = "-"
+        try:
+            geopend  = pd.to_datetime(t.get("created_at"))
+            gesloten = pd.to_datetime(t.get("closed_at"))
+            if pd.notna(geopend) and pd.notna(gesloten):
+                minuten  = int((gesloten - geopend).total_seconds() // 60)
+                duur_str = f"{minuten // 60}u {minuten % 60}m" if minuten >= 60 else f"{minuten}m"
+        except Exception:
+            pass
+
         trade_lijst.append({
-            "id":           t["id"],
-            "asset":        t["asset"],
-            "richting":     t["direction"],
-            "resultaat":    t["result_pct"],
-            "result_euro":  t.get("result_euro", 0),
-            "exit_reden":   t.get("exit_reason", "onbekend"),
-            "fout_analyse": t.get("mistake_analysis", ""),
+            "id":            t["id"],
+            "asset":         t["asset"],
+            "richting":      t["direction"],
+            "resultaat":     t["result_pct"],
+            "result_euro":   t.get("result_euro") or 0,
+            "capital":       t.get("capital") or 0,
+            "entry_price":   t.get("entry_price"),
+            "exit_price":    t.get("exit_price"),
+            "stop_loss":     t.get("stop_loss"),
+            "take_profit":   t.get("take_profit"),
+            "strategy":      t.get("strategy", ""),
+            "exit_reden":    t.get("exit_reason", "onbekend"),
+            "fout_analyse":  t.get("mistake_analysis", ""),
+            "created_at":    t.get("created_at", ""),
+            "closed_at":     t.get("closed_at", ""),
+            "duur":          duur_str,
         })
 
     samenvatting = (

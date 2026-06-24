@@ -1,0 +1,20 @@
+[Unit]
+Description=TradeAI Paper Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin/TRADEAI
+ExecStart=/usr/bin/python3 /home/admin/TRADEAI/run_bot.py
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+StandardOutput=append:/home/admin/TRADEAI/bot.log
+StandardError=append:/home/admin/TRADEAI/bot.log
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,8 @@ import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+from src.reliability import http_get_json
+
 
 def load_csv(filepath: str) -> pd.DataFrame:
     """
@@ -108,41 +110,64 @@ def get_available_csv_files(data_dir: str = "data") -> list[str]:
     return sorted(str(f) for f in pad.glob("*.csv"))
 
 
-def fetch_live_crypto_candles(
-    product_id: str = "BTC-USD",
-    granularity: int = 300,
-    limit: int = 300,
-) -> pd.DataFrame:
-    """
-    Haal actuele candles op via de publieke Coinbase Exchange API.
+_fg_cache: dict = {"value": None, "label": None, "ts": 0.0}
 
-    Dit gebruikt geen API-key en plaatst geen orders. Coinbase accepteert maximaal
-    300 candles per request, daarom begrenzen we de limit bewust.
-    """
-    allowed_granularities = {60, 300, 900, 3600, 21600, 86400}
-    if granularity not in allowed_granularities:
-        raise ValueError("Ongeldige timeframe voor Coinbase candles.")
 
-    limit = max(55, min(int(limit), 300))
+def fetch_fear_greed(max_age_seconds: int = 3600) -> dict:
+    """
+    Haal de crypto Fear & Greed Index op via de gratis alternative.me API.
+    Resultaat wordt 1 uur gecached om API-verzoeken te beperken.
+
+    Returns: {"value": int (0-100), "label": str}
+      0-24  : Extreme Fear   — markt is overpanisch, mogelijke bodems
+      25-44 : Fear
+      45-55 : Neutral
+      56-74 : Greed
+      75-100: Extreme Greed  — markt is overerhit, mogelijke toppen
+    """
+    import time
+    nu = time.time()
+    if _fg_cache["value"] is not None and nu - _fg_cache["ts"] < max_age_seconds:
+        return {"value": _fg_cache["value"], "label": _fg_cache["label"]}
+    try:
+        payload = http_get_json(
+            "https://api.alternative.me/fng/?limit=1",
+            timeout=8,
+            headers={"User-Agent": "TradeAI-Coach/1.0"},
+            retries=2,
+        )
+        data = payload["data"][0]
+        _fg_cache["value"] = int(data["value"])
+        _fg_cache["label"] = data["value_classification"]
+        _fg_cache["ts"]    = nu
+    except Exception:
+        if _fg_cache["value"] is None:
+            return {"value": 50, "label": "Neutral"}
+    return {"value": _fg_cache["value"], "label": _fg_cache["label"]}
+
+
+_BINANCE_INTERVAL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 21600: "6h", 86400: "1d"}
+
+
+def _coinbase_id_to_binance(product_id: str) -> str:
+    """Convert 'BTC-USD' → 'BTCUSDT', 'ETH-BTC' stays 'ETHBTC'."""
+    base, quote = product_id.upper().split("-")
+    if quote == "USD":
+        quote = "USDT"
+    return base + quote
+
+
+def _fetch_from_coinbase(product_id: str, granularity: int, limit: int) -> pd.DataFrame:
     end = datetime.now(timezone.utc)
     start = end - timedelta(seconds=granularity * limit)
-
-    response = requests.get(
+    data = http_get_json(
         f"https://api.exchange.coinbase.com/products/{product_id}/candles",
-        params={
-            "granularity": granularity,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        },
+        params={"granularity": granularity, "start": start.isoformat(), "end": end.isoformat()},
         headers={"User-Agent": "TradeAI-Coach/1.0"},
         timeout=15,
     )
-    response.raise_for_status()
-    data = response.json()
-
     if not data:
         raise ValueError(f"Geen live candles ontvangen voor {product_id}.")
-
     rows = []
     for candle in data:
         if len(candle) < 5:
@@ -155,9 +180,111 @@ def fetch_live_crypto_candles(
             "close": float(candle[4]),
             "volume": float(candle[5]) if len(candle) > 5 else 0.0,
         })
-
     df = pd.DataFrame(rows)
     if df.empty:
         raise ValueError(f"Live data voor {product_id} kon niet worden verwerkt.")
-
     return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def _fetch_from_binance(product_id: str, granularity: int, limit: int) -> pd.DataFrame:
+    interval = _BINANCE_INTERVAL.get(granularity)
+    if interval is None:
+        raise ValueError("Ongeldige timeframe voor Binance candles.")
+    symbol = _coinbase_id_to_binance(product_id)
+    data = http_get_json(
+        "https://api.binance.com/api/v3/klines",
+        params={"symbol": symbol, "interval": interval, "limit": min(limit, 1000)},
+        headers={"User-Agent": "TradeAI-Coach/1.0"},
+        timeout=15,
+    )
+    if not data:
+        raise ValueError(f"Geen live candles ontvangen voor {symbol} via Binance.")
+    rows = []
+    for candle in data:
+        rows.append({
+            "timestamp": pd.to_datetime(candle[0], unit="ms", utc=True),
+            "open": float(candle[1]),
+            "high": float(candle[2]),
+            "low": float(candle[3]),
+            "close": float(candle[4]),
+            "volume": float(candle[5]),
+        })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise ValueError(f"Live data voor {symbol} kon niet worden verwerkt.")
+    return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def _generate_synthetic_candles(
+    product_id: str,
+    granularity: int,
+    limit: int,
+) -> pd.DataFrame:
+    """Genereer synthetische candles als alle externe API's onbereikbaar zijn."""
+    seed = abs(hash(product_id)) % (2**31)
+    rng = np.random.default_rng(seed)
+
+    base_prices = {
+        "BTC": 65000.0, "ETH": 3000.0, "SOL": 150.0,
+        "XRP": 0.55, "BNB": 580.0, "ADA": 0.45, "DOGE": 0.16,
+    }
+    base = base_prices.get(product_id.split("-")[0].upper(), 100.0)
+
+    end = datetime.now(timezone.utc)
+    timestamps = [end - timedelta(seconds=granularity * (limit - i)) for i in range(limit)]
+
+    price = base
+    rows = []
+    for ts in timestamps:
+        change = rng.normal(0.0, 0.012)
+        close = max(price * (1 + change), base * 0.1)
+        open_ = price
+        high = max(open_, close) * (1 + abs(rng.normal(0, 0.004)))
+        low  = min(open_, close) * (1 - abs(rng.normal(0, 0.004)))
+        volume = rng.uniform(200, 2000) * (1 + abs(change) * 20)
+        rows.append({
+            "timestamp": pd.Timestamp(ts),
+            "open": round(open_, 4),
+            "high": round(high, 4),
+            "low": round(low, 4),
+            "close": round(close, 4),
+            "volume": round(volume, 2),
+        })
+        price = close
+
+    df = pd.DataFrame(rows)
+    df["_simulated"] = True
+    return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def fetch_live_crypto_candles(
+    product_id: str = "BTC-USD",
+    granularity: int = 300,
+    limit: int = 300,
+) -> pd.DataFrame:
+    """
+    Haal actuele candles op. Probeert Binance, dan Coinbase, dan synthetische data
+    als beide onbereikbaar zijn (bijv. geen internetverbinding op de server).
+    """
+    allowed_granularities = {60, 300, 900, 3600, 21600, 86400}
+    if granularity not in allowed_granularities:
+        raise ValueError("Ongeldige timeframe voor candles.")
+
+    limit = max(55, min(int(limit), 300))
+
+    errors = []
+
+    try:
+        return _fetch_from_binance(product_id, granularity, limit)
+    except Exception as e:
+        errors.append(f"Binance: {e}")
+
+    try:
+        return _fetch_from_coinbase(product_id, granularity, limit)
+    except Exception as e:
+        errors.append(f"Coinbase: {e}")
+
+    df = _generate_synthetic_candles(product_id, granularity, limit)
+    df["_simulated"] = True
+    df["_errors"] = "; ".join(errors)
+    return df

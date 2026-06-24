@@ -1,0 +1,7 @@
+# TradeAI — sta admin toe om de bot en website te herstarten zonder wachtwoord
+admin ALL=(ALL) NOPASSWD: /bin/systemctl restart tradeai
+admin ALL=(ALL) NOPASSWD: /bin/systemctl restart tradeai-web
+admin ALL=(ALL) NOPASSWD: /bin/systemctl stop tradeai
+admin ALL=(ALL) NOPASSWD: /bin/systemctl stop tradeai-web
+admin ALL=(ALL) NOPASSWD: /bin/systemctl start tradeai
+admin ALL=(ALL) NOPASSWD: /bin/systemctl start tradeai-web
